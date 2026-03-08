@@ -1,0 +1,10 @@
+Sample Document
+
+This is a sample document created by the MCP Azure project generator.
+
+You can use this to test the document_server tools:
+- Read this file using the read_document tool
+- Create new documents using write_document
+- List all documents using list_documents
+
+Feel free to delete this file and create your own!
