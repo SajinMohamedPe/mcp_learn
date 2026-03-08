@@ -203,12 +203,13 @@ class AzureMCPClient:
                 print(f"✅ [PROMPT FLOW] Retrieved prompt template (length: {len(template_text)} chars)")
                 print(f"   Template content: {template_text[:150]}...")
                 
-                # Add prompt context to messages
+                # Add prompt context to messages (will be prepended to user message later)
                 messages.append({
                     "role": "system",
                     "content": f"For this request, follow this prompt template:\n\n{template_text}"
                 })
                 print(f"✅ [PROMPT FLOW] Added prompt template to message context (total messages now: {len(messages)})")
+                print(f"   ⚠️  Note: Template will be prepended to user message for better Claude processing")
                 
             except Exception as e:
                 print(f"⚠️ [PROMPT FLOW] Error retrieving prompt '{prompt['name']}': {e}")
@@ -251,8 +252,18 @@ class AzureMCPClient:
         print(f"📋 [CHAT FLOW] Step 3: Applying matching prompts")
         messages = await self.apply_matching_prompts(user_message, messages)
         
-        # Add user message
-        messages.append({"role": "user", "content": user_message})
+        # Add user message (with prompt template prepended if available)
+        if len(messages) > 1 and messages[1]["role"] == "system" and "prompt template" in messages[1]["content"]:
+            # Extract prompt template and prepend to user message
+            prompt_template_content = messages[1]["content"]
+            # Remove the prompt template system message
+            messages.pop(1)
+            enhanced_user_message = f"{prompt_template_content}\n\nUser request: {user_message}"
+            print(f"📋 [CHAT FLOW] Prepended prompt template to user message")
+        else:
+            enhanced_user_message = user_message
+            
+        messages.append({"role": "user", "content": enhanced_user_message})
         print(f"✅ [CHAT FLOW] Added user message to context")
         
         # Convert MCP tools to Azure format
@@ -267,7 +278,7 @@ class AzureMCPClient:
             print(f"   Message {i+1}: role='{role}', content_preview='{content_preview}...'")
         
         print(f"\n{'='*70}")
-        print(f"💬 USER: {user_message}")
+        print(f"💬 USER: {enhanced_user_message}")
         print(f"{'='*70}\n")
         
         # Initial request to Claude

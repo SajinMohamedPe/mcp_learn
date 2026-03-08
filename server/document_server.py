@@ -9,7 +9,7 @@ docs = {
     "report.pdf": "The report details the state of a 20m condenser tower.",
     "financials.docx": "These financials outline the project's budget and expenditures.",
     "outlook.pdf": "This document presents the projected future performance of the system.",
-    "plan.md": "The plan outlines the steps for the project's implementation.",
+    "plan.md": "The plan outlines the steps for the project's implementation This has to have step 1: Manager do project planning, to be compleed by first quarter , step 2: Architect to design, to be completed by second quarter , step 3: Developer to implement, to be completed by third quarter.",
     "spec.txt": "These specifications define the technical requirements for the equipment.",
 }
 
