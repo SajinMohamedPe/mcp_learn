@@ -1,27 +1,24 @@
 """
-MCP Client that connects Claude (via Azure) to MCP servers
+Azure MCP Client - Integrates MCP with Azure AI Foundry Claude
 """
 
-import asyncio
 import os
 import json
 from typing import Optional
 from dotenv import load_dotenv
 from openai import AzureOpenAI
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp_client import MCPClient
 
-# Load environment variables
 load_dotenv()
 
 
 class AzureMCPClient:
     """
     MCP Client for Azure AI Foundry + Claude
-    Handles communication between Azure Claude and MCP servers
+    Combines MCPClient (for MCP servers) with Azure OpenAI (for Claude)
     """
     
-    def __init__(self):
+    def __init__(self, server_command: str, server_args: list[str]):
         # Azure OpenAI client setup
         self.azure_client = AzureOpenAI(
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -30,39 +27,28 @@ class AzureMCPClient:
         )
         self.deployment_name = os.getenv("AZURE_DEPLOYMENT_NAME")
         
-        # MCP session (will be initialized when connecting to server)
-        self.session: Optional[ClientSession] = None
-        self.available_tools = []
-    
-    async def connect_to_server(self, server_script_path: str):
-        """
-        Connect to an MCP server running locally
-        
-        Args:
-            server_script_path: Path to the MCP server Python script
-        """
-        server_params = StdioServerParameters(
-            command="python",
-            args=[server_script_path],
-            env=None
+        # MCP client setup
+        self.mcp_client = MCPClient(
+            command=server_command,
+            args=server_args
         )
         
-        stdio_transport = await stdio_client(server_params)
-        self.stdio, self.write = stdio_transport
-        
-        async with ClientSession(self.stdio, self.write) as session:
-            self.session = session
-            
-            # Initialize the session
-            await session.initialize()
-            
-            # Get available tools from the server
-            tools_response = await session.list_tools()
-            self.available_tools = tools_response.tools
-            
-            print(f"Connected to MCP server. Available tools: {[t.name for t in self.available_tools]}")
-            
-            return session
+        self.available_tools = []
+    
+    
+    async def __aenter__(self):
+        """Async context manager entry - delegate to MCP client"""
+        await self.mcp_client.connect()
+        self.available_tools = await self.mcp_client.list_tools()
+        print(f"✅ Connected to MCP server")
+        print(f"📦 Available tools: {[t.name for t in self.available_tools]}\n")
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - delegate to MCP client"""
+        await self.mcp_client.cleanup()
+    
+
     
     def format_tools_for_azure(self) -> list[dict]:
         """
@@ -87,31 +73,35 @@ class AzureMCPClient:
         """
         Execute an MCP tool and return the result
         """
-        if not self.session:
-            raise RuntimeError("Not connected to MCP server. Call connect_to_server() first.")
-        
-        result = await self.session.call_tool(tool_name, tool_args)
+        result = await self.mcp_client.call_tool(tool_name, tool_args)
         
         # Extract text content from result
-        if result.content:
+        if result and result.content:
             return "\n".join([
                 item.text for item in result.content 
                 if hasattr(item, 'text')
             ])
         return "No result"
     
-    async def chat(self, user_message: str) -> str:
+    async def chat(self, user_message: str, max_iterations: int = 5) -> str:
         """
         Send a message to Claude via Azure, with MCP tool support
+        
+        Args:
+            user_message: The user's question or request
+            max_iterations: Maximum number of tool call iterations
+        
+        Returns:
+            Claude's response
         """
         messages = [{"role": "user", "content": user_message}]
         
         # Convert MCP tools to Azure format
         tools = self.format_tools_for_azure()
         
-        print(f"\n{'='*60}")
-        print(f"USER: {user_message}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*70}")
+        print(f"💬 USER: {user_message}")
+        print(f"{'='*70}\n")
         
         # Initial request to Claude
         response = self.azure_client.chat.completions.create(
@@ -121,8 +111,7 @@ class AzureMCPClient:
             tool_choice="auto"
         )
         
-        # Handle tool calls in a loop
-        max_iterations = 5
+        # Handle tool calls in a loop (Claude might chain multiple tools)
         iteration = 0
         
         while iteration < max_iterations:
@@ -158,7 +147,7 @@ class AzureMCPClient:
                     # Execute the MCP tool
                     tool_result = await self.call_mcp_tool(tool_name, tool_args)
                     
-                    print(f"   Result: {tool_result[:100]}{'...' if len(tool_result) > 100 else ''}\n")
+                    print(f"   ✅ Result: {tool_result[:100]}{'...' if len(tool_result) > 100 else ''}\n")
                     
                     # Add tool result to conversation
                     messages.append({
@@ -167,7 +156,7 @@ class AzureMCPClient:
                         "content": tool_result
                     })
                 
-                # Get Claude's next response
+                # Get Claude's next response (with tool results)
                 response = self.azure_client.chat.completions.create(
                     model=self.deployment_name,
                     messages=messages,
@@ -179,71 +168,31 @@ class AzureMCPClient:
             else:
                 # No more tool calls, return final response
                 final_response = assistant_message.content or "No response"
-                print(f"💬 CLAUDE: {final_response}\n")
+                print(f"✨ CLAUDE: {final_response}\n")
+                print(f"{'='*70}\n")
                 return final_response
         
-        return "Max iterations reached"
-    
-    async def list_resources(self):
-        """List available resources from MCP server"""
-        if not self.session:
-            raise RuntimeError("Not connected to MCP server")
-        
-        resources_response = await self.session.list_resources()
-        return resources_response.resources
-    
-    async def read_resource(self, uri: str) -> str:
-        """Read a specific resource"""
-        if not self.session:
-            raise RuntimeError("Not connected to MCP server")
-        
-        resource_content = await self.session.read_resource(uri)
-        
-        # Extract text content
-        if resource_content.contents:
-            return "\n".join([
-                item.text for item in resource_content.contents
-                if hasattr(item, 'text')
-            ])
-        return "No content"
-    
-    async def get_prompt(self, prompt_name: str, arguments: dict) -> str:
-        """Get a prompt template from the server"""
-        if not self.session:
-            raise RuntimeError("Not connected to MCP server")
-        
-        prompt_result = await self.session.get_prompt(prompt_name, arguments)
-        
-        # Extract the prompt text
-        if prompt_result.messages:
-            return prompt_result.messages[0].content.text
-        return ""
+        return "⚠️  Max iterations reached"
 
 
+# Test function
 async def main():
-    """
-    Example usage of Azure MCP Client
-    """
-    client = AzureMCPClient()
+    import asyncio
     
-    # Connect to the MCP server
-    server_path = "server/document_server.py"
-    
-    async with await client.connect_to_server(server_path):
-        # Example conversations
-        
-        # 1. List documents
-        await client.chat("What documents are available?")
-        
-        # 2. Create a document
-        await client.chat("Create a file called 'meeting_notes.txt' with the content: 'Team meeting on Azure MCP integration. Action items: 1. Test tools 2. Deploy to production'")
-        
-        # 3. Read the document
-        await client.chat("Read the meeting notes file")
-        
-        # 4. Complex multi-step task
-        await client.chat("Create a todo list file with 3 tasks, then read it back to confirm")
+    async with AzureMCPClient(
+        server_command="python3",
+        server_args=["server/document_server.py"],
+    ) as client:
+        # Test chat with MCP tool calling
+        response = await client.chat("Read the spec.txt document and tell me what it contains")
+        print(response)
 
 
 if __name__ == "__main__":
+    import asyncio
+    import sys
+    
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    
     asyncio.run(main())

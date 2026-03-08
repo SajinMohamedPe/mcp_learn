@@ -4,7 +4,7 @@ Demonstrates tools, resources, and prompts
 """
 
 import asyncio
-from client.azure_client import AzureMCPClient
+from client.mcp_client import AzureMCPClient
 
 
 async def demo():
