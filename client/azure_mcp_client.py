@@ -7,7 +7,10 @@ import json
 from typing import Optional
 from dotenv import load_dotenv
 from openai import AzureOpenAI
-from mcp_client import MCPClient
+try:
+    from .mcp_client import MCPClient
+except ImportError:
+    from mcp_client import MCPClient
 
 load_dotenv()
 
